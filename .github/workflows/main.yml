@@ -1,0 +1,32 @@
+name: Build & Push Player360 API Container
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+          docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build container image
+        run: |
+          IMAGE="ghcr.io/${{ github.repository_owner }}/player360-api:latest"
+          docker build -t $IMAGE .
+
+      - name: Push container image
+        run: |
+          IMAGE="ghcr.io/${{ github.repository_owner }}/player360-api:latest"
+          docker push $IMAGE
