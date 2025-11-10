@@ -1,8 +1,11 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const path = require('path');
 const connectDB = require('./config/db');
+
+const app = express();
 
 // NEW: persistent sessions storage routes (must be mounted first)
 const sessionsStoreRoute = require('./routes/sessions.store');
@@ -16,10 +19,9 @@ const reviewsRoute  = require('./routes/reviews');
 const wellnessRoute = require('./routes/wellness');
 const parentRoute   = require('./routes/parent');
 
-const app = express();
-
 // Basic middleware
-app.use(cors());
+app.use(cors({ origin: true, credentials: true }));
+app.use(cookieParser());
 app.use(express.json());
 
 // Connect to MongoDB
