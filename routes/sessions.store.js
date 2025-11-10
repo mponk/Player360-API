@@ -128,36 +128,36 @@ router.get('/sessions/:sessionId/ratings', requireAuth(['coach','parent']), asyn
   }
 });
 
-/* ---------------------- Daily (Home) -------------------- */
+// === DAILY (Home) ===
 router.get('/sessions/daily', requireAuth(['coach','parent']), async (req, res) => {
   try {
-    const sessionId = normalizeSessionId('today');
+    const dateId = new Date().toISOString().slice(0, 10);   // "YYYY-MM-DD"
     const db = await getDb();
-    const att = await db.collection('attendance').findOne({ sessionId });
-    const rat = await db.collection('ratings').findOne({ sessionId });
+    const att = await db.collection('attendance').findOne({ sessionId: dateId });
+    const rat = await db.collection('ratings').findOne({ sessionId: dateId });
 
     const total = att?.items?.length || 0;
     const present = att?.items?.filter(x => x.status === 'present').length || 0;
+    const attendanceText = total ? `${present} / ${total}` : '-';
 
     const avgRating = rat && Array.isArray(rat.items) && rat.items.length
       ? Number((rat.items.reduce((s, x) => s + (x.rating || 0), 0) / rat.items.length).toFixed(1))
       : null;
 
+    // NOTE: FE lama pakai string di `attendance`, tapi kita juga kirim bentuk object
     res.json({
-      sessionId: 'today',
-      date: new Date().toISOString().slice(0, 10),
-
-      // bentuk string + numerik (biar FE mana pun bisa render)
-      attendance: {
-        text: total ? `${present} / ${total}` : '-',
+      sessionId: 'today',        // <- penting untuk FE lama
+      date: dateId,              // tanggal tetap dikirim terpisah
+      attendance: attendanceText, // <- kompatibel FE lama
+      attendanceObj: {           // <- bentuk baru yang lebih kaya
         present,
-        total
+        total,
+        text: attendanceText
       },
-
-      focus: '-',     // (bisa diisi dari koleksi lain nanti)
+      focus: '-',
       notes: '-',
       risk: '-',
-      avgRating   // number atau null
+      avgRating
     });
   } catch (e) {
     console.error('daily error', e);
@@ -165,37 +165,37 @@ router.get('/sessions/daily', requireAuth(['coach','parent']), async (req, res) 
   }
 });
 
-/* ---------------------- Recap -------------------------- */
+// === RECAP (Detail) ===
 router.get('/sessions/:sessionId/recap', requireAuth(['coach','parent']), async (req, res) => {
   try {
-    const sessionId = normalizeSessionId(req.params.sessionId);
+    const isToday = !req.params.sessionId || req.params.sessionId === 'today';
+    const dateId = isToday ? new Date().toISOString().slice(0,10) : req.params.sessionId;
+
     const db = await getDb();
-    const att = await db.collection('attendance').findOne({ sessionId });
-    const rat = await db.collection('ratings').findOne({ sessionId });
+    const att = await db.collection('attendance').findOne({ sessionId: dateId });
+    const rat = await db.collection('ratings').findOne({ sessionId: dateId });
 
     const present = (att?.items || []).filter(x => x.status === 'present').map(x => x.number);
     const absent  = (att?.items || []).filter(x => x.status === 'absent').map(x => x.number);
 
-    // highlight/concern sederhana dari rating & notes
     const highlight = [];
     const concern = [];
     for (const it of (rat?.items || [])) {
       if (it.rating >= 4) highlight.push(`#${it.number} rating ${it.rating}${it.notes ? ' — ' + it.notes : ''}`);
-      if (it.notes && /cedera|injur|pain|fisik|lemes/i.test(it.notes)) {
-        concern.push(`#${it.number} — ${it.notes}`);
-      }
+      if (it.notes && /cedera|injur|pain|fisik|lemes/i.test(it.notes)) concern.push(`#${it.number} — ${it.notes}`);
     }
 
     res.json({
-      sessionId,
-      date: new Date().toISOString().slice(0,10),
+      sessionId: isToday ? 'today' : dateId,   // <- penting: “today” untuk FE lama
+      date: dateId,                            // tanggal tetap eksplisit
       attendance: { present, absent },
       ratings: (rat?.items || []).map(x => ({ number: x.number, rating: x.rating, notes: x.notes || '' })),
       highlight,
       concern,
-      notes: '-'  // placeholder supaya FE yang expect 'notes' tetap aman
+      notes: '-'                                // placeholder aman untuk FE yang expect `notes`
     });
-  } catch {
+  } catch (e) {
+    console.error('recap error', e);
     res.status(500).json({ error: 'server_error' });
   }
 });
