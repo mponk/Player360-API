@@ -1,48 +1,58 @@
 // middleware/authMiddleware.js
 const jwt = require('jsonwebtoken');
 
-function getToken(req) {
-  const h = req.headers['authorization'] || req.headers['Authorization'];
-  if (h && h.startsWith('Bearer ')) return h.slice(7);
-  if (req.cookies && req.cookies.p360) return req.cookies.p360; // cookie
-  if (req.headers['x-auth']) return req.headers['x-auth'];      // optional fallback
-  return null;
-}
-
-function verifyToken(req, res) {
-  const token = getToken(req);
-  if (!token) {
-    res.status(401).json({ error: 'unauthorized' });
-    return null;
-  }
-  try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET); // { id, role, name, iat, exp }
-    req.user = payload;
-    return payload;
-  } catch {
-    res.status(401).json({ error: 'unauthorized' });
-    return null;
-  }
-}
-
-function requireAuth(req, res, next) {
-  const p = verifyToken(req, res);
-  if (!p) return;
-  next();
-}
-
-function requireRole(...roles) {
+/**
+ * Middleware: wajib login + (opsional) cek role.
+ * Contoh:
+ *   router.get('/x', authRequired());                     // cukup login
+ *   router.post('/x', authRequired(['coach','admin']));   // login + role
+ */
+function authRequired(roles = []) {
   return (req, res, next) => {
-    const p = verifyToken(req, res);
-    if (!p) return;
-    if (roles.length && !roles.includes(p.role)) {
-      return res.status(403).json({ error: 'forbidden' });
+    try {
+      // Ambil token dari header/cookie (lihat authToken.js untuk helper khusus FE)
+      const auth = req.headers.authorization || '';
+      const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+
+      if (!token) {
+        return res.status(401).json({ error: 'unauthorized', message: 'Missing bearer token' });
+      }
+
+      const payload = jwt.verify(token, process.env.JWT_SECRET);
+      req.user = { id: payload.id, role: payload.role, name: payload.name };
+
+      if (Array.isArray(roles) && roles.length > 0 && !roles.includes(req.user.role)) {
+        return res.status(403).json({ error: 'forbidden', message: 'Insufficient role' });
+      }
+
+      return next();
+    } catch (err) {
+      return res.status(401).json({ error: 'unauthorized', message: 'Invalid token' });
     }
-    next();
   };
 }
 
-const requireCoach  = requireRole('coach');
-const requireParent = requireRole('parent', 'coach');
+/**
+ * optionalAuth: kalau ada token valid → set req.user; kalau tidak → lanjut tanpa error.
+ */
+function optionalAuth(req, res, next) {
+  try {
+    const auth = req.headers.authorization || '';
+    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+    if (token) {
+      const payload = jwt.verify(token, process.env.JWT_SECRET);
+      req.user = { id: payload.id, role: payload.role, name: payload.name };
+    }
+  } catch (_) {
+    // abaikan token invalid
+  }
+  next();
+}
 
-module.exports = { getToken, requireAuth, requireRole, requireCoach, requireParent };
+/* Export kompatibel dua gaya:
+   - const { authRequired } = require('../middleware/authMiddleware')
+   - const mw = require('../middleware/authMiddleware'); mw.authRequired(...)
+*/
+module.exports = authRequired;              // default
+module.exports.authRequired = authRequired; // named
+module.exports.optionalAuth = optionalAuth; // named
