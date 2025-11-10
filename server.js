@@ -5,40 +5,46 @@ const cookieParser = require('cookie-parser');
 const path = require('path');
 const connectDB = require('./config/db');
 
+// middleware opsional yang cuma mengisi req.user dari header/cookie
+const authToken = require('./middleware/authToken');
+
 const app = express();
 
-// routes
-const sessionsStoreRoute = require('./routes/sessions.store'); // MUST be first
+// routes prioritas (store) HARUS duluan
+const sessionsStoreRoute = require('./routes/sessions.store');
+
+// modul route
 const healthRoute   = require('./routes/health');
 const authRoute     = require('./routes/auth');
 const playersRoute  = require('./routes/players');
-const sessionsRoute = require('./routes/sessions'); // legacy/fallback
+const sessionsRoute = require('./routes/sessions');   // legacy/fallback
 const reviewsRoute  = require('./routes/reviews');
 const wellnessRoute = require('./routes/wellness');
 const parentRoute   = require('./routes/parent');
 
-// middleware
 app.use(cors({ origin: true, credentials: true }));
 app.use(cookieParser());
 app.use(express.json());
 
-// db
+// isi req.user bila ada token (tidak memaksa)
+app.use(authToken);
+
 connectDB();
 
-// static (optional)
+// static (kalau ada)
 app.use(express.static(path.join(__dirname, 'public')));
 
-// API mounts (order matters)
-app.use(sessionsStoreRoute);     // <— override legacy
+// urutan route
+app.use(sessionsStoreRoute);
 app.use('/', healthRoute);
 app.use('/', authRoute);
 app.use('/', playersRoute);
-app.use('/', sessionsRoute);     // legacy/fallback after store
+app.use('/', sessionsRoute);
 app.use('/', reviewsRoute);
 app.use('/', wellnessRoute);
 app.use('/', parentRoute);
 
-// catch-all
+// catch-all untuk FE
 app.get('*', (req, res) => {
   const isApi =
     req.path.startsWith('/auth')     ||
@@ -49,7 +55,9 @@ app.get('*', (req, res) => {
     req.path.startsWith('/reviews')  ||
     req.path.startsWith('/health');
 
-  if (isApi) return res.status(404).json({ error: 'not_found', message: 'API route not found' });
+  if (isApi) {
+    return res.status(404).json({ error: 'not_found', message: 'API route not found' });
+  }
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
