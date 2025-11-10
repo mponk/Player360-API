@@ -1,15 +1,25 @@
 // middleware/authToken.js
-module.exports = function getToken(req) {
-  // Prioritas: Authorization: Bearer <token>
-  const h = req.headers['authorization'] || req.headers['Authorization'];
-  if (h && h.startsWith('Bearer ')) return h.slice(7);
+const jwt = require('jsonwebtoken');
 
-  // Fallback: cookie 'p360' (HttpOnly)
-  if (req.cookies && req.cookies.p360) return req.cookies.p360;
+/**
+ * Ambil token dari cookie 'token' lalu taruh di req.user (kalau valid).
+ * Tidak mewajibkan login (biarin route milih sendiri pakai authRequired atau tidak).
+ */
+function authToken(req, res, next) {
+  try {
+    const bearer = req.headers.authorization || '';
+    const headerToken = bearer.startsWith('Bearer ') ? bearer.slice(7) : null;
+    const cookieToken = req.cookies && req.cookies.token ? req.cookies.token : null;
+    const token = headerToken || cookieToken;
 
-  // Fallback alternatif (opsional): X-Auth header
-  const x = req.headers['x-auth'];
-  if (x) return x;
+    if (token) {
+      const payload = jwt.verify(token, process.env.JWT_SECRET);
+      req.user = { id: payload.id, role: payload.role, name: payload.name };
+    }
+  } catch (_) {
+    // ignore
+  }
+  next();
+}
 
-  return null;
-};
+module.exports = authToken;
