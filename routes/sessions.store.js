@@ -5,7 +5,6 @@ const { MongoClient } = require('mongodb');
 
 const router = express.Router();
 
-// ---- Helpers ----------------------------------------------------
 const mustEnv = (k) => {
   const v = process.env[k];
   if (!v) throw new Error(`Missing env ${k}`);
@@ -22,7 +21,6 @@ async function getDb() {
   return mongo.db();
 }
 
-// Robust auth: verify token locally, ensure role coach unless overridden
 function requireAuth(roles = ['coach']) {
   const allow = Array.isArray(roles) ? roles : [roles];
   return (req, res, next) => {
@@ -36,59 +34,41 @@ function requireAuth(roles = ['coach']) {
         return res.status(403).json({ error: 'forbidden' });
       }
       next();
-    } catch (e) {
+    } catch {
       return res.status(401).json({ error: 'unauthorized' });
     }
   };
 }
 
-// accept both: [{...}] or {items:[{...}]}
 function normalizeItems(body) {
   if (Array.isArray(body)) return body;
   if (body && Array.isArray(body.items)) return body.items;
   return null;
 }
-
-function normalizeSessionId(sessionIdRaw) {
-  if (!sessionIdRaw || sessionIdRaw === 'today') {
-    // pakai tanggal server (cukup untuk case kita)
-    return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-  }
-  return sessionIdRaw;
+function normalizeSessionId(sid) {
+  if (!sid || sid === 'today') return new Date().toISOString().slice(0, 10);
+  return sid;
 }
 
-// ---- Attendance -------------------------------------------------
+/* ---------------------- Attendance ---------------------- */
 router.post('/sessions/:sessionId/attendance', requireAuth('coach'), async (req, res) => {
   try {
     const items = normalizeItems(req.body);
-    if (!items) {
-      return res.status(400).json({ error: 'invalid_data', message: 'Attendance must be an array' });
-    }
-    // validate
+    if (!items) return res.status(400).json({ error: 'invalid_data', message: 'Attendance must be an array' });
     const allowed = new Set(['present', 'excused', 'absent']);
     for (const it of items) {
-      if (typeof it.number !== 'number' || !allowed.has((it.status || '').toLowerCase())) {
+      if (typeof it.number !== 'number' || !allowed.has(String(it.status).toLowerCase())) {
         return res.status(400).json({ error: 'invalid_data', message: 'Invalid number/status' });
       }
-      it.status = it.status.toLowerCase();
+      it.status = String(it.status).toLowerCase();
     }
-
     const sessionId = normalizeSessionId(req.params.sessionId);
     const db = await getDb();
     await db.collection('attendance').updateOne(
       { sessionId },
-      {
-        $set: {
-          sessionId,
-          items,
-          coachId: req.user.id,
-          updatedAt: new Date()
-        },
-        $setOnInsert: { createdAt: new Date() }
-      },
+      { $set: { sessionId, items, coachId: req.user.id, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
       { upsert: true }
     );
-
     res.json({ ok: true, saved: items.length });
   } catch (e) {
     console.error('attendance save error', e);
@@ -102,39 +82,26 @@ router.get('/sessions/:sessionId/attendance', requireAuth(['coach','parent']), a
     const db = await getDb();
     const doc = await db.collection('attendance').findOne({ sessionId });
     res.json(doc || { sessionId, items: [] });
-  } catch (e) {
+  } catch {
     res.status(500).json({ error: 'server_error' });
   }
 });
 
-// ---- Ratings / Performance -------------------------------------
+/* ---------------------- Ratings ------------------------- */
 router.post('/sessions/:sessionId/ratings', requireAuth('coach'), async (req, res) => {
   try {
     const items = normalizeItems(req.body);
-    if (!items) {
-      return res.status(400).json({ error: 'invalid_data', message: 'Ratings must be an array' });
-    }
+    if (!items) return res.status(400).json({ error: 'invalid_data', message: 'Ratings must be an array' });
     for (const it of items) {
-      if (typeof it.number !== 'number') {
-        return res.status(400).json({ error: 'invalid_data', message: 'Missing player number' });
-      }
-      if (typeof it.rating !== 'number' || it.rating < 1 || it.rating > 5) {
-        return res.status(400).json({ error: 'invalid_data', message: 'Rating must be 1..5' });
+      if (typeof it.number !== 'number' || typeof it.rating !== 'number' || it.rating < 1 || it.rating > 5) {
+        return res.status(400).json({ error: 'invalid_data', message: 'Rating must be 1..5 with player number' });
       }
     }
     const sessionId = normalizeSessionId(req.params.sessionId);
     const db = await getDb();
     await db.collection('ratings').updateOne(
       { sessionId },
-      {
-        $set: {
-          sessionId,
-          items,
-          coachId: req.user.id,
-          updatedAt: new Date()
-        },
-        $setOnInsert: { createdAt: new Date() }
-      },
+      { $set: { sessionId, items, coachId: req.user.id, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
       { upsert: true }
     );
     res.json({ ok: true, saved: items.length });
@@ -144,25 +111,24 @@ router.post('/sessions/:sessionId/ratings', requireAuth('coach'), async (req, re
   }
 });
 
-// alias untuk kompatibilitas front-end yang mungkin pakai /performance
+// kompatibilitas /performance
 router.post('/sessions/:sessionId/performance', requireAuth('coach'), async (req, res, next) => {
   req.url = req.url.replace('/performance', '/ratings');
   next();
 }, router);
 
-// read-back
 router.get('/sessions/:sessionId/ratings', requireAuth(['coach','parent']), async (req, res) => {
   try {
     const sessionId = normalizeSessionId(req.params.sessionId);
     const db = await getDb();
     const doc = await db.collection('ratings').findOne({ sessionId });
     res.json(doc || { sessionId, items: [] });
-  } catch (e) {
+  } catch {
     res.status(500).json({ error: 'server_error' });
   }
 });
 
-// ---- Daily summary (dipakai Home) -------------------------------
+/* ---------------------- Daily (Home) -------------------- */
 router.get('/sessions/daily', requireAuth(['coach','parent']), async (req, res) => {
   try {
     const sessionId = normalizeSessionId('today');
@@ -170,24 +136,28 @@ router.get('/sessions/daily', requireAuth(['coach','parent']), async (req, res) 
     const att = await db.collection('attendance').findOne({ sessionId });
     const rat = await db.collection('ratings').findOne({ sessionId });
 
-    let attendance = '-';
-    if (att && Array.isArray(att.items)) {
-      const present = att.items.filter(x => x.status === 'present').length;
-      attendance = `${present} / ${att.items.length}`;
-    }
+    const total = att?.items?.length || 0;
+    const present = att?.items?.filter(x => x.status === 'present').length || 0;
 
     const avgRating = rat && Array.isArray(rat.items) && rat.items.length
-      ? (rat.items.reduce((s, x) => s + (x.rating || 0), 0) / rat.items.length).toFixed(1)
-      : '-';
+      ? Number((rat.items.reduce((s, x) => s + (x.rating || 0), 0) / rat.items.length).toFixed(1))
+      : null;
 
     res.json({
       sessionId: 'today',
       date: new Date().toISOString().slice(0, 10),
-      attendance,
-      focus: '-',            // bisa isi dari koleksi lain nanti
-      notes: '-',            // idem
-      risk: '-',             // idem
-      avgRating
+
+      // bentuk string + numerik (biar FE mana pun bisa render)
+      attendance: {
+        text: total ? `${present} / ${total}` : '-',
+        present,
+        total
+      },
+
+      focus: '-',     // (bisa diisi dari koleksi lain nanti)
+      notes: '-',
+      risk: '-',
+      avgRating   // number atau null
     });
   } catch (e) {
     console.error('daily error', e);
@@ -195,7 +165,7 @@ router.get('/sessions/daily', requireAuth(['coach','parent']), async (req, res) 
   }
 });
 
-// ---- Recap (dipakai /recap) ------------------------------------
+/* ---------------------- Recap -------------------------- */
 router.get('/sessions/:sessionId/recap', requireAuth(['coach','parent']), async (req, res) => {
   try {
     const sessionId = normalizeSessionId(req.params.sessionId);
@@ -203,19 +173,29 @@ router.get('/sessions/:sessionId/recap', requireAuth(['coach','parent']), async 
     const att = await db.collection('attendance').findOne({ sessionId });
     const rat = await db.collection('ratings').findOne({ sessionId });
 
-    const presentNames = (att?.items || []).filter(x => x.status === 'present').map(x => x.number);
-    const absentNames  = (att?.items || []).filter(x => x.status === 'absent').map(x => x.number);
+    const present = (att?.items || []).filter(x => x.status === 'present').map(x => x.number);
+    const absent  = (att?.items || []).filter(x => x.status === 'absent').map(x => x.number);
+
+    // highlight/concern sederhana dari rating & notes
+    const highlight = [];
+    const concern = [];
+    for (const it of (rat?.items || [])) {
+      if (it.rating >= 4) highlight.push(`#${it.number} rating ${it.rating}${it.notes ? ' — ' + it.notes : ''}`);
+      if (it.notes && /cedera|injur|pain|fisik|lemes/i.test(it.notes)) {
+        concern.push(`#${it.number} — ${it.notes}`);
+      }
+    }
 
     res.json({
       sessionId,
       date: new Date().toISOString().slice(0,10),
-      attendance: {
-        present: presentNames,
-        absent: absentNames
-      },
-      ratings: (rat?.items || []).map(x => ({ number: x.number, rating: x.rating, notes: x.notes || '' }))
+      attendance: { present, absent },
+      ratings: (rat?.items || []).map(x => ({ number: x.number, rating: x.rating, notes: x.notes || '' })),
+      highlight,
+      concern,
+      notes: '-'  // placeholder supaya FE yang expect 'notes' tetap aman
     });
-  } catch (e) {
+  } catch {
     res.status(500).json({ error: 'server_error' });
   }
 });
