@@ -1,163 +1,135 @@
 // routes/sessions.store.js
 const express = require('express');
-const jwt = require('jsonwebtoken');
-const { MongoClient } = require('mongodb');
-
 const router = express.Router();
+const { requireCoach } = require('../middleware/authMiddleware');
 
-const mustEnv = (k) => {
-  const v = process.env[k];
-  if (!v) throw new Error(`Missing env ${k}`);
-  return v;
-};
-const MONGO_URI = mustEnv('MONGODB_URI');
+// gunakan Mongo driver via mongoose koneksi default
+const mongoose = require('mongoose');
+const getDb = () => mongoose.connection.db;
 
-let mongo;
-async function getDb() {
-  if (!mongo) {
-    mongo = new MongoClient(MONGO_URI);
-    await mongo.connect();
+// helper sessionId
+function resolveSessionId(id = 'today') {
+  if (!id || id === 'today') {
+    const d = new Date();
+    const yyyy = d.getUTCFullYear();
+    const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(d.getUTCDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
   }
-  return mongo.db();
+  return id;
 }
 
-function requireAuth(roles = ['coach']) {
-  const allow = Array.isArray(roles) ? roles : [roles];
-  return (req, res, next) => {
-    try {
-      const h = req.headers.authorization || '';
-      const token = h.startsWith('Bearer ') ? h.slice(7) : null;
-      if (!token) return res.status(401).json({ error: 'unauthorized' });
-      const payload = jwt.verify(token, mustEnv('JWT_SECRET'));
-      req.user = payload;
-      if (allow.length && !allow.includes(payload.role)) {
-        return res.status(403).json({ error: 'forbidden' });
-      }
-      next();
-    } catch {
-      return res.status(401).json({ error: 'unauthorized' });
-    }
-  };
-}
-
-function normalizeItems(body) {
-  if (Array.isArray(body)) return body;
-  if (body && Array.isArray(body.items)) return body.items;
-  return null;
-}
-function normalizeSessionId(sid) {
-  if (!sid || sid === 'today') return new Date().toISOString().slice(0, 10);
-  return sid;
-}
-
-/* ---------------------- Attendance ---------------------- */
-router.post('/sessions/:sessionId/attendance', requireAuth('coach'), async (req, res) => {
+/**
+ * POST /sessions/today/attendance
+ * body: Array<{ number: Number, status: 'present'|'absent'|'excused' }>
+ */
+router.post('/sessions/today/attendance', requireCoach, async (req, res) => {
   try {
-    const items = normalizeItems(req.body);
-    if (!items) return res.status(400).json({ error: 'invalid_data', message: 'Attendance must be an array' });
-    const allowed = new Set(['present', 'excused', 'absent']);
-    for (const it of items) {
-      if (typeof it.number !== 'number' || !allowed.has(String(it.status).toLowerCase())) {
-        return res.status(400).json({ error: 'invalid_data', message: 'Invalid number/status' });
-      }
-      it.status = String(it.status).toLowerCase();
-    }
-    const sessionId = normalizeSessionId(req.params.sessionId);
-    const db = await getDb();
+    const items = Array.isArray(req.body) ? req.body : null;
+    if (!items) return res.status(400).json({ error: 'invalid_data', message: 'Body must be an array' });
+
+    const db = getDb();
+    const sessionId = resolveSessionId('today');
+
     await db.collection('attendance').updateOne(
-      { sessionId },
-      { $set: { sessionId, items, coachId: req.user.id, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+      { sessionId, coachId: req.user.id },
+      { $set: { sessionId, coachId: req.user.id, items, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
       { upsert: true }
     );
+
     res.json({ ok: true, saved: items.length });
   } catch (e) {
-    console.error('attendance save error', e);
+    console.error('save attendance error', e);
     res.status(500).json({ error: 'server_error' });
   }
 });
 
-router.get('/sessions/:sessionId/attendance', requireAuth(['coach','parent']), async (req, res) => {
+/**
+ * GET /sessions/today/attendance
+ */
+router.get('/sessions/today/attendance', requireCoach, async (req, res) => {
   try {
-    const sessionId = normalizeSessionId(req.params.sessionId);
-    const db = await getDb();
-    const doc = await db.collection('attendance').findOne({ sessionId });
-    res.json(doc || { sessionId, items: [] });
-  } catch {
+    const db = getDb();
+    const sessionId = resolveSessionId('today');
+    const doc = await db.collection('attendance').findOne({ sessionId, coachId: req.user.id });
+    if (!doc) return res.status(404).json({ error: 'not_found' });
+    res.json(doc);
+  } catch (e) {
+    console.error('get attendance error', e);
     res.status(500).json({ error: 'server_error' });
   }
 });
 
-/* ---------------------- Ratings ------------------------- */
-router.post('/sessions/:sessionId/ratings', requireAuth('coach'), async (req, res) => {
+/**
+ * POST /sessions/today/ratings
+ * body: Array<{ number: Number, rating: Number, notes?: String }>
+ */
+router.post('/sessions/today/ratings', requireCoach, async (req, res) => {
   try {
-    const items = normalizeItems(req.body);
-    if (!items) return res.status(400).json({ error: 'invalid_data', message: 'Ratings must be an array' });
-    for (const it of items) {
-      if (typeof it.number !== 'number' || typeof it.rating !== 'number' || it.rating < 1 || it.rating > 5) {
-        return res.status(400).json({ error: 'invalid_data', message: 'Rating must be 1..5 with player number' });
-      }
-    }
-    const sessionId = normalizeSessionId(req.params.sessionId);
-    const db = await getDb();
+    const items = Array.isArray(req.body) ? req.body : null;
+    if (!items) return res.status(400).json({ error: 'invalid_data', message: 'Body must be an array' });
+
+    const db = getDb();
+    const sessionId = resolveSessionId('today');
+
     await db.collection('ratings').updateOne(
-      { sessionId },
-      { $set: { sessionId, items, coachId: req.user.id, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+      { sessionId, coachId: req.user.id },
+      { $set: { sessionId, coachId: req.user.id, items, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
       { upsert: true }
     );
+
     res.json({ ok: true, saved: items.length });
   } catch (e) {
-    console.error('ratings save error', e);
+    console.error('save ratings error', e);
     res.status(500).json({ error: 'server_error' });
   }
 });
 
-// kompatibilitas /performance
-router.post('/sessions/:sessionId/performance', requireAuth('coach'), async (req, res, next) => {
-  req.url = req.url.replace('/performance', '/ratings');
-  next();
-}, router);
-
-router.get('/sessions/:sessionId/ratings', requireAuth(['coach','parent']), async (req, res) => {
+/**
+ * GET /sessions/today/ratings
+ */
+router.get('/sessions/today/ratings', requireCoach, async (req, res) => {
   try {
-    const sessionId = normalizeSessionId(req.params.sessionId);
-    const db = await getDb();
-    const doc = await db.collection('ratings').findOne({ sessionId });
-    res.json(doc || { sessionId, items: [] });
-  } catch {
+    const db = getDb();
+    const sessionId = resolveSessionId('today');
+    const doc = await db.collection('ratings').findOne({ sessionId, coachId: req.user.id });
+    if (!doc) return res.status(404).json({ error: 'not_found' });
+    res.json(doc);
+  } catch (e) {
+    console.error('get ratings error', e);
     res.status(500).json({ error: 'server_error' });
   }
 });
 
-// === DAILY (Home) ===
-router.get('/sessions/daily', requireAuth(['coach','parent']), async (req, res) => {
+/**
+ * GET /sessions/daily  → ringkasan untuk dashboard
+ */
+router.get('/sessions/daily', requireCoach, async (req, res) => {
   try {
-    const dateId = new Date().toISOString().slice(0, 10);   // "YYYY-MM-DD"
-    const db = await getDb();
-    const att = await db.collection('attendance').findOne({ sessionId: dateId });
-    const rat = await db.collection('ratings').findOne({ sessionId: dateId });
+    const db = getDb();
+    const sessionId = resolveSessionId('today');
+    const att = await db.collection('attendance').findOne({ sessionId, coachId: req.user.id });
+    const rat = await db.collection('ratings').findOne({ sessionId, coachId: req.user.id });
 
-    const total = att?.items?.length || 0;
-    const present = att?.items?.filter(x => x.status === 'present').length || 0;
-    const attendanceText = total ? `${present} / ${total}` : '-';
+    let present = 0, total = 0, avgRating = null;
+    if (att && Array.isArray(att.items)) {
+      total = att.items.length;
+      present = att.items.filter(i => i.status === 'present').length;
+    }
+    if (rat && Array.isArray(rat.items) && rat.items.length) {
+      const sum = rat.items.reduce((s, x) => s + (Number(x.rating) || 0), 0);
+      avgRating = +(sum / rat.items.length).toFixed(1);
+    }
 
-    const avgRating = rat && Array.isArray(rat.items) && rat.items.length
-      ? Number((rat.items.reduce((s, x) => s + (x.rating || 0), 0) / rat.items.length).toFixed(1))
-      : null;
-
-    // NOTE: FE lama pakai string di `attendance`, tapi kita juga kirim bentuk object
     res.json({
-      sessionId: 'today',        // <- penting untuk FE lama
-      date: dateId,              // tanggal tetap dikirim terpisah
-      attendance: attendanceText, // <- kompatibel FE lama
-      attendanceObj: {           // <- bentuk baru yang lebih kaya
-        present,
-        total,
-        text: attendanceText
-      },
+      sessionId: 'today',
+      date: sessionId,
+      attendance: total ? `${present} / ${total}` : '-',
+      attendanceObj: { present, total, text: total ? `${present} / ${total}` : '-' },
       focus: '-',
       notes: '-',
       risk: '-',
-      avgRating
+      avgRating: avgRating ?? '-',
     });
   } catch (e) {
     console.error('daily error', e);
@@ -165,34 +137,39 @@ router.get('/sessions/daily', requireAuth(['coach','parent']), async (req, res) 
   }
 });
 
-// === RECAP (Detail) ===
-router.get('/sessions/:sessionId/recap', requireAuth(['coach','parent']), async (req, res) => {
+/**
+ * GET /sessions/today/recap → view recap
+ */
+router.get('/sessions/today/recap', requireCoach, async (req, res) => {
   try {
-    const isToday = !req.params.sessionId || req.params.sessionId === 'today';
-    const dateId = isToday ? new Date().toISOString().slice(0,10) : req.params.sessionId;
+    const db = getDb();
+    const sessionId = resolveSessionId('today');
+    const att = await db.collection('attendance').findOne({ sessionId, coachId: req.user.id });
+    const rat = await db.collection('ratings').findOne({ sessionId, coachId: req.user.id });
 
-    const db = await getDb();
-    const att = await db.collection('attendance').findOne({ sessionId: dateId });
-    const rat = await db.collection('ratings').findOne({ sessionId: dateId });
+    const present = (att?.items || []).filter(i => i.status === 'present').map(i => i.number);
+    const absent  = (att?.items || []).filter(i => i.status === 'absent').map(i => i.number);
 
-    const present = (att?.items || []).filter(x => x.status === 'present').map(x => x.number);
-    const absent  = (att?.items || []).filter(x => x.status === 'absent').map(x => x.number);
+    const ratings = (rat?.items || []).map(x => ({
+      number: x.number, rating: x.rating, notes: x.notes || ''
+    }));
 
-    const highlight = [];
-    const concern = [];
-    for (const it of (rat?.items || [])) {
-      if (it.rating >= 4) highlight.push(`#${it.number} rating ${it.rating}${it.notes ? ' — ' + it.notes : ''}`);
-      if (it.notes && /cedera|injur|pain|fisik|lemes/i.test(it.notes)) concern.push(`#${it.number} — ${it.notes}`);
-    }
+    const highlight = ratings
+      .filter(x => x.rating >= 4)
+      .map(x => `#${x.number} rating ${x.rating}${x.notes ? ` — ${x.notes}` : ''}`);
+
+    const concern = ratings
+      .filter(x => x.rating <= 2 || /cedera|injury|lelah|sakit|lemes/i.test(x.notes || ''))
+      .map(x => `#${x.number}${x.notes ? ` — ${x.notes}` : ''}`);
 
     res.json({
-      sessionId: isToday ? 'today' : dateId,   // <- penting: “today” untuk FE lama
-      date: dateId,                            // tanggal tetap eksplisit
+      sessionId: 'today',
+      date: sessionId,
       attendance: { present, absent },
-      ratings: (rat?.items || []).map(x => ({ number: x.number, rating: x.rating, notes: x.notes || '' })),
+      ratings,
       highlight,
       concern,
-      notes: '-'                                // placeholder aman untuk FE yang expect `notes`
+      notes: '-',
     });
   } catch (e) {
     console.error('recap error', e);

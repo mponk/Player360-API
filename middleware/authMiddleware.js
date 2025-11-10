@@ -1,32 +1,48 @@
-const { verifyToken } = require('../utils/jwt');
+// middleware/authMiddleware.js
+const jwt = require('jsonwebtoken');
 
-function authRequired(rolesAllowed = []) {
+function getToken(req) {
+  const h = req.headers['authorization'] || req.headers['Authorization'];
+  if (h && h.startsWith('Bearer ')) return h.slice(7);
+  if (req.cookies && req.cookies.p360) return req.cookies.p360; // cookie
+  if (req.headers['x-auth']) return req.headers['x-auth'];      // optional fallback
+  return null;
+}
+
+function verifyToken(req, res) {
+  const token = getToken(req);
+  if (!token) {
+    res.status(401).json({ error: 'unauthorized' });
+    return null;
+  }
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET); // { id, role, name, iat, exp }
+    req.user = payload;
+    return payload;
+  } catch {
+    res.status(401).json({ error: 'unauthorized' });
+    return null;
+  }
+}
+
+function requireAuth(req, res, next) {
+  const p = verifyToken(req, res);
+  if (!p) return;
+  next();
+}
+
+function requireRole(...roles) {
   return (req, res, next) => {
-    const authHeader = req.headers.authorization || '';
-    const parts = authHeader.split(' ');
-
-    if (parts.length !== 2 || parts[0] !== 'Bearer') {
-      return res.status(401).json({ error: 'No token' });
+    const p = verifyToken(req, res);
+    if (!p) return;
+    if (roles.length && !roles.includes(p.role)) {
+      return res.status(403).json({ error: 'forbidden' });
     }
-
-    const token = parts[1];
-
-    try {
-      const decoded = verifyToken(token);
-
-      if (rolesAllowed.length > 0 && !rolesAllowed.includes(decoded.role)) {
-        return res.status(403).json({ 
-          error: 'forbidden',
-          message: 'role not allowed'
-        });
-      }
-
-      req.user = decoded; // { id, role, name }
-      next();
-    } catch (err) {
-      return res.status(401).json({ error: 'Invalid token' });
-    }
+    next();
   };
 }
 
-module.exports = { authRequired };
+const requireCoach  = requireRole('coach');
+const requireParent = requireRole('parent', 'coach');
+
+module.exports = { getToken, requireAuth, requireRole, requireCoach, requireParent };
