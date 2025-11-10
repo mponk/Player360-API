@@ -5,7 +5,7 @@ function getToken(req) {
   const h = req.headers['authorization'] || req.headers['Authorization'];
   if (h && h.startsWith('Bearer ')) return h.slice(7);
   if (req.cookies && req.cookies.p360) return req.cookies.p360; // cookie
-  if (req.headers['x-auth']) return req.headers['x-auth'];      // fallback opsional
+  if (req.headers['x-auth']) return req.headers['x-auth'];      // optional fallback
   return null;
 }
 
@@ -16,8 +16,8 @@ function verifyToken(req, res) {
     return null;
   }
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = payload; // { id, role, name, iat, exp }
+    const payload = jwt.verify(token, process.env.JWT_SECRET); // { id, role, name, iat, exp }
+    req.user = payload;
     return payload;
   } catch {
     res.status(401).json({ error: 'unauthorized' });
