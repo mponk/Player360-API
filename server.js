@@ -4,43 +4,52 @@ const cors = require('cors');
 const path = require('path');
 const connectDB = require('./config/db');
 
-const healthRoute = require('./routes/health');
-const authRoute = require('./routes/auth');
-const playersRoute = require('./routes/players');
-const sessionsRoute = require('./routes/sessions');
-const reviewsRoute = require('./routes/reviews');
+// API route modules
+const healthRoute   = require('./routes/health');
+const authRoute     = require('./routes/auth');
+const playersRoute  = require('./routes/players');
+const sessionsRoute = require('./routes/sessions');   // legacy/fallback
+const reviewsRoute  = require('./routes/reviews');
 const wellnessRoute = require('./routes/wellness');
-const parentRoute = require('./routes/parent');
+const parentRoute   = require('./routes/parent');
+
+// NEW: persistent sessions storage routes (must be mounted first)
+const sessionsStoreRoute = require('./routes/sessions.store');
 
 const app = express();
 
+// Basic middleware
 app.use(cors());
 app.use(express.json());
 
+// Connect to MongoDB
 connectDB();
 
-// Serve static frontend files
+// Serve static frontend (if present in this container)
 app.use(express.static(path.join(__dirname, 'public')));
 
-// API routes
+// --- API routes ---
+// IMPORTANT: mount the persistent store FIRST so it overrides any legacy handlers.
+app.use(sessionsStoreRoute);
+
+// Other API routes
 app.use('/', healthRoute);
 app.use('/', authRoute);
 app.use('/', playersRoute);
-app.use('/', sessionsRoute);
+app.use('/', sessionsRoute);   // legacy fallback; keep after sessions.store
 app.use('/', reviewsRoute);
 app.use('/', wellnessRoute);
 app.use('/', parentRoute);
-app.use(require('./routes/sessions.store'));
 
-// Catch-all: serve index.html for frontend routes, 404 for API routes
+// Catch-all: serve index.html for frontend routes, 404 for API-only paths
 app.get('*', (req, res) => {
   const isApiRequest =
-    req.path.startsWith('/auth') ||
+    req.path.startsWith('/auth')     ||
     req.path.startsWith('/sessions') ||
-    req.path.startsWith('/parent') ||
-    req.path.startsWith('/players') ||
+    req.path.startsWith('/parent')   ||
+    req.path.startsWith('/players')  ||
     req.path.startsWith('/wellness') ||
-    req.path.startsWith('/reviews') ||
+    req.path.startsWith('/reviews')  ||
     req.path.startsWith('/health');
 
   if (isApiRequest) {
@@ -53,7 +62,7 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🎉 Player360 API running on port ${PORT}`);
 });
