@@ -30,6 +30,7 @@ app.use('/', sessionsRoute);
 app.use('/', reviewsRoute);
 app.use('/', wellnessRoute);
 app.use('/', parentRoute);
+app.use(require('./routes/sessions.store'));
 
 // Catch-all: serve index.html for frontend routes, 404 for API routes
 app.get('*', (req, res) => {
