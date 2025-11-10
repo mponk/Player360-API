@@ -4,6 +4,9 @@ const cors = require('cors');
 const path = require('path');
 const connectDB = require('./config/db');
 
+// NEW: persistent sessions storage routes (must be mounted first)
+const sessionsStoreRoute = require('./routes/sessions.store');
+
 // API route modules
 const healthRoute   = require('./routes/health');
 const authRoute     = require('./routes/auth');
@@ -12,9 +15,6 @@ const sessionsRoute = require('./routes/sessions');   // legacy/fallback
 const reviewsRoute  = require('./routes/reviews');
 const wellnessRoute = require('./routes/wellness');
 const parentRoute   = require('./routes/parent');
-
-// NEW: persistent sessions storage routes (must be mounted first)
-const sessionsStoreRoute = require('./routes/sessions.store');
 
 const app = express();
 
